@@ -1,0 +1,18 @@
+# venv
+.venv/
+
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+
+# build data (regenerable)
+data/raw/
+data/chroma/
+data/faiss/
+
+# eval output
+eval/results/
