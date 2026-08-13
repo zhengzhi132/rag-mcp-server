@@ -36,6 +36,22 @@ class FakeService:
     def list_topics(self) -> list[str]:
         return ["topic_a", "topic_b"]
 
+    def chunk_text(self, chunk_id: str) -> str:
+        return f"dummy text for {chunk_id}"
+
+
+class FakeJudge:
+    def __init__(self, verdicts: list[str]) -> None:
+        self._verdicts = list(verdicts)
+        self._i = 0
+        self.calls = 0
+
+    def invoke(self, messages: list) -> AIMessage:
+        v = self._verdicts[min(self._i, len(self._verdicts) - 1)]
+        self._i += 1
+        self.calls += 1
+        return AIMessage(content=v)
+
 
 def _hit(query: str, cid: str, section: str) -> dict:
     return {
@@ -47,10 +63,15 @@ def _hit(query: str, cid: str, section: str) -> dict:
     }
 
 
-def _agent(fake_llm: FakeLLM, service: FakeService) -> RagAgent:
+def _agent(
+    fake_llm: FakeLLM,
+    service: FakeService,
+    judge: FakeJudge | None = None,
+) -> RagAgent:
     a = RagAgent(k=2, max_iters=3)
     a._llm = fake_llm  # type: ignore[attr-defined]
     a._service = service  # type: ignore[attr-defined]
+    a._judge = judge or FakeJudge(["[1] supported: 资料支持该论断"])  # type: ignore[attr-defined]
     return a
 
 
@@ -125,3 +146,49 @@ def test_refuses_when_max_iters_exhausted():
 
 def test_extract_citations_reused():
     assert _extract_citations("see [2]", 5) == [2]
+
+
+def test_verify_pass_returns_first_candidate():
+    llm = FakeLLM(
+        [
+            _msg(tool_calls=[{"name": "search", "args": {"query": "linear"}, "id": "c1"}]),
+            _msg(content="用 [1]。"),
+        ]
+    )
+    svc = FakeService({"linear": [_hit("linear", "cid-1", "sec1")]})
+    judge = FakeJudge(["[1] supported: 资料支持该论断"])
+    r = _agent(llm, svc, judge).ask("q")
+    assert r.answer == "用 [1]。"
+    assert judge.calls == 1  # 只验证一次，通过即返回
+
+
+def test_verify_fail_then_agent_corrects():
+    llm = FakeLLM(
+        [
+            _msg(tool_calls=[{"name": "search", "args": {"query": "linear"}, "id": "c1"}]),
+            _msg(content="错版答案 [1]。"),
+            _msg(content="修正后答案 [1]。"),
+        ]
+    )
+    svc = FakeService({"linear": [_hit("linear", "cid-1", "sec1")]})
+    judge = FakeJudge(["[1] unsupported: 资料没提到该说法", "[1] supported: ok"])
+    r = _agent(llm, svc, judge).ask("q")
+    assert r.answer == "修正后答案 [1]。"
+    assert judge.calls == 2  # 第一版被驳回，第二版通过
+
+
+def test_verify_exhausted_returns_last_candidate():
+    llm = FakeLLM(
+        [
+            _msg(tool_calls=[{"name": "search", "args": {"query": "linear"}, "id": "c1"}]),
+            _msg(content="始终不改 [1]。"),
+        ]
+    )
+    svc = FakeService({"linear": [_hit("linear", "cid-1", "sec1")]})
+    judge = FakeJudge(["[1] unsupported: 每次都不支持"])
+    a = _agent(llm, svc, judge)
+    a._max_verify = 1
+    r = a.ask("q")
+    assert r.answer == "始终不改 [1]。"
+    assert r.refused is False  # 验证轮耗尽，返回最后一版而非放弃
+    assert judge.calls == 2

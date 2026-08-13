@@ -81,6 +81,14 @@ class RagService:
         self.ensure_loaded()
         return sorted({c.section for c in self._chunks})
 
+    def chunk_text(self, chunk_id: str) -> str:
+        """按 chunk_id 取完整文本，供引用验证等需要完整上下文的场景。"""
+        self.ensure_loaded()
+        for c in self._chunks:
+            if c.chunk_id == chunk_id:
+                return c.text
+        return ""
+
     def stats(self) -> dict:
         """知识库统计：分块数、文档数、主题数、向量维度。"""
         self.ensure_loaded()
