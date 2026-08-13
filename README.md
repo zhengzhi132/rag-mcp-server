@@ -9,7 +9,7 @@
 - **混合检索**：向量（BGE）+ 关键词（BM25）双路，RRF(k=60) 融合，规避两路分数量纲不可比
 - **带引用回答**：DeepSeek 基于检索上下文生成，强制 `[n]` 引用 + Sources，越界引用后校验剔除；资料不足正确降级拒绝，不编造
 - **MCP Server**：`search` / `ask` / `list_topics` / `stats` 四个标准工具，lifespan 只加载一次模型
-- **ReAct 检索 Agent**：模型自行决定检索策略，跨多主题迭代搜索（search / list_topics 工具调用），全局来源表保证多次检索的 `[n]` 引用一致
+- **ReAct 检索 Agent + 自纠正验证**：模型自行决定检索策略，跨多主题迭代搜索（search / list_topics 工具调用）；独立验证器逐条检查 `[n]` 引用是否支持论断，不支持的反馈回 Agent 重搜修正
 
 ## 架构
 
@@ -37,7 +37,7 @@ PyTorch 官方文档 (HTML)
  FastMCP tools: search / ask / list_topics / stats   (lifespan 单次加载)
         │
         ▼
- ReAct Agent (demo --agent): 工具调用迭代检索 → 全局来源表 → 带引用回答
+ ReAct Agent (demo --agent): 工具调用迭代检索 → 全局来源表 → 验证器检查 [n] 支持性 → 不通过则重搜修正
 ```
 
 ## 技术栈
@@ -153,3 +153,4 @@ rag-mcp-server/
 5. **无答案降级**：`_low_confidence` 阈值（0.02，实测校准）+ SYSTEM_PROMPT 规则 3 双保险，资料不足明确拒绝，不编造。
 6. **lifespan 单次加载**：BGE 模型（~130MB）+ FAISS 索引在服务启动时加载一次，所有工具调用复用，stdio 会话不重载。
 7. **ReAct 全局来源表**：Agent 多次检索的 chunk 去重后进全局来源表，每次 search 返回的片段用全局绝对编号 [n]，最终回答引用的 [n] 精确反查——跨主题多轮检索的引用依然可信。
+8. **自纠正验证循环**：Agent 给出答案后由独立验证器 LLM（temperature 0）逐条判断每个 [n] 引用是否真的支持论断；不支持的引用连同理由反馈回 Agent 重搜/改写（max_verify 轮），把引用校验从「格式校验」升级为「语义支持性校验」。
