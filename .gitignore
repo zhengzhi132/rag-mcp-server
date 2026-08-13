@@ -16,3 +16,6 @@ data/faiss/
 
 # eval output
 eval/results/
+
+# Claude Code project config (machine-specific absolute paths)
+.mcp.json
