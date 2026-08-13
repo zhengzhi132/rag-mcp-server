@@ -144,7 +144,7 @@ rag-mcp-server/
 └── .env.example
 ```
 
-## 关键设计（面试可讲）
+## 关键设计
 
 1. **双向量库分工**：FAISS 快、精确余弦、无持久化；Chroma 落盘、where 过滤、备份对照。统一 `md5(source|index)` 的 chunk_id 对齐，构建后双库 top-5 重合率校验，证明双库结果一致。
 2. **BGE 检索姿势**：文档编码不加 instruction、查询编码加前缀 `"Represent this sentence for searching relevant passages: "`，配合 `normalize_embeddings=True` 使 IndexFlatIP 内积 = 余弦。
