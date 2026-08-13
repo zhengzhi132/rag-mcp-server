@@ -27,16 +27,18 @@ from ragmcp.service.rag_service import RagService
 # 决定模型何时搜索、搜几次、何时停、怎么引用。可自行调优。
 AGENT_SYSTEM_PROMPT = (
     "你是 RAG 检索 Agent，负责基于 PyTorch 官方文档知识库回答问题。\n"
-    "你有两个工具：\n"
-    "- search(query)：检索知识库，返回相关资料片段，每个片段带全局 [n] 编号\n"
+    "你有三个工具：\n"
+    "- search(query)：模糊检索知识库，返回相关资料片段，每个片段带全局 [n] 编号\n"
+    "- search_section(section)：按 API 主题精确检索，已知确切主题（如 list_topics 返回的）时用它定位更准\n"
     "- list_topics()：列出知识库覆盖的 API 主题\n"
     "规则：\n"
     "1. 回答问题前先用 search 检索；不确定就多搜几次（换关键词 / 拆主题），直到证据足够。\n"
-    "2. 最终回答必须基于检索到的资料，用 [n] 引用（编号来自 search 返回结果），不要编造。\n"
-    "3. 答案跨多个主题时，分多次检索，别只搜一次就答。\n"
-    "4. 搜了几次仍无法回答，直接说「根据已有资料无法回答该问题」。\n"
-    "5. 证据够了就停止检索，直接给出最终回答，不要多余搜索。\n"
-    "6. 使用与问题相同的语言回答。"
+    "2. 若知道确切 API 主题（如问题直接问某个函数），优先用 search_section 精确定位。\n"
+    "3. 最终回答必须基于检索到的资料，用 [n] 引用（编号来自工具返回结果），不要编造。\n"
+    "4. 答案跨多个主题时，分多次检索，别只搜一次就答。\n"
+    "5. 搜了几次仍无法回答，直接说「根据已有资料无法回答该问题」。\n"
+    "6. 证据够了就停止检索，直接给出最终回答，不要多余搜索。\n"
+    "7. 使用与问题相同的语言回答。"
 )
 
 _SEARCH_TOOL = {
@@ -58,6 +60,19 @@ _LIST_TOPICS_TOOL = {
         "name": "list_topics",
         "description": "列出知识库覆盖的全部 API 主题",
         "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+_SEARCH_SECTION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search_section",
+        "description": "按 API 主题精确检索，返回该主题下带 [n] 编号的资料片段",
+        "parameters": {
+            "type": "object",
+            "properties": {"section": {"type": "string", "description": "API 主题名（如 torch.nn.Linear）"}},
+            "required": ["section"],
+        },
     },
 }
 
@@ -101,7 +116,7 @@ class RagAgent:
             temperature=0.2,
             timeout=60,
             max_retries=2,
-        ).bind_tools([_SEARCH_TOOL, _LIST_TOPICS_TOOL])
+        ).bind_tools([_SEARCH_TOOL, _SEARCH_SECTION_TOOL, _LIST_TOPICS_TOOL])
         # 引用验证器：独立 LLM，temperature 0，只看"引用是否支持论断"
         self._judge = ChatOpenAI(
             model=settings.deepseek_model,
@@ -203,14 +218,24 @@ class RagAgent:
     def _run_tool(self, name: str, args: dict) -> str:
         if name == "search":
             return self._search(args.get("query", ""))
+        if name == "search_section":
+            return self._search_section(args.get("section", ""))
         if name == "list_topics":
             return "\n".join(self._service.list_topics())
         return f"未知工具: {name}"
 
     def _search(self, query: str) -> str:
-        """检索并把结果登记进全局来源表，返回带全局 [n] 编号的文本。"""
+        """模糊检索并把结果登记进全局来源表。"""
+        return self._register_and_format(self._service.search(query, k=self._k))
+
+    def _search_section(self, section: str) -> str:
+        """按 API 主题精确检索并把结果登记进全局来源表。"""
+        return self._register_and_format(self._service.search_section(section, k=self._k))
+
+    def _register_and_format(self, results: list[dict]) -> str:
+        """把检索结果登记进全局来源表，返回带全局 [n] 编号的文本。"""
         lines: list[str] = []
-        for r in self._service.search(query, k=self._k):
+        for r in results:
             cid = r["chunk_id"]
             if cid not in self._seen:
                 self._seen.add(cid)

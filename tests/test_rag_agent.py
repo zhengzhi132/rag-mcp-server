@@ -27,11 +27,19 @@ class FakeLLM:
 
 
 class FakeService:
-    def __init__(self, results_by_query: dict[str, list[dict]]) -> None:
+    def __init__(
+        self,
+        results_by_query: dict[str, list[dict]],
+        sections: dict[str, list[dict]] | None = None,
+    ) -> None:
         self._results = results_by_query
+        self._sections = sections or {}
 
     def search(self, query: str, k: int = 5) -> list[dict]:
         return self._results.get(query, [])
+
+    def search_section(self, section: str, k: int = 5) -> list[dict]:
+        return self._sections.get(section, [])
 
     def list_topics(self) -> list[str]:
         return ["topic_a", "topic_b"]
@@ -192,3 +200,22 @@ def test_verify_exhausted_returns_last_candidate():
     assert r.answer == "始终不改 [1]。"
     assert r.refused is False  # 验证轮耗尽，返回最后一版而非放弃
     assert judge.calls == 2
+
+
+def test_search_section_tool_precise_retrieval():
+    llm = FakeLLM(
+        [
+            _msg(tool_calls=[{"name": "search_section", "args": {"section": "torch.nn.Linear"}, "id": "c1"}]),
+            _msg(content="用 [1]。"),
+        ]
+    )
+    svc = FakeService(
+        {},
+        sections={"torch.nn.Linear": [_hit("sec", "cid-linear", "class torch.nn. Linear")]},
+    )
+    r = _agent(llm, svc).ask("What does Linear do?")
+    assert r.refused is False
+    assert r.answer == "用 [1]。"
+    assert len(r.sources) == 1
+    assert r.sources[0].section == "class torch.nn. Linear"
+    assert r.trace[0]["action"] == "search_section"

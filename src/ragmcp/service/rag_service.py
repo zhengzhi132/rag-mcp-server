@@ -89,6 +89,26 @@ class RagService:
                 return c.text
         return ""
 
+    def search_section(self, section: str, k: int = 5) -> list[dict]:
+        """按 API 主题（section）精确检索，返回该主题下的 chunks。
+
+        供 Agent 的 search_section 工具使用：已知确切主题（如从 list_topics
+        拿到）时，按主题精确定位，不受模糊查询召回干扰。score 置 0（精确命中，
+        无排序意义）。
+        """
+        self.ensure_loaded()
+        hits = [c for c in self._chunks if c.section == section]
+        return [
+            {
+                "chunk_id": c.chunk_id,
+                "source": c.source,
+                "section": c.section,
+                "score": 0.0,
+                "snippet": c.text[:200],
+            }
+            for c in hits[:k]
+        ]
+
     def stats(self) -> dict:
         """知识库统计：分块数、文档数、主题数、向量维度。"""
         self.ensure_loaded()
